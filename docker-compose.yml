@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: revops-db
+    environment:
+      POSTGRES_USER: revops
+      POSTGRES_PASSWORD: revops123
+      POSTGRES_DB: revops_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revops -d revops_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: revops-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: revops-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://revops:revops123@db:5432/revops_db
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_PROVIDER=mock
+      - SECRET_KEY=hackathon-secret-key-2024
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: revops-celery
+    command: celery -A celery_worker worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql://revops:revops123@db:5432/revops_db
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_PROVIDER=mock
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: revops-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
